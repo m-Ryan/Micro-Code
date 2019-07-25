@@ -1,27 +1,38 @@
-// interface Options {
-//   uploadAPI?: (file: File)=>any; // API.uploadByQiniu(result.file); 上传文件到后端的接口
-//   count?: number;
-//   accept?: string;
-//   minSize?: number;
-//   maxSize?: number;
-//   autoUpload?: boolean;
-// }
+interface Options {
+  count?: number;
+  accept?: string;
+  minSize?: number;
+  maxSize?: number;
+  autoUpload?: boolean;
+}
+interface UploaderOption extends Options {
+  count: number;
+}
 
-const defaultOptions = {
-  count: 1,
-  autoUpload: true,
-};
+type UploaderServer = (file: File) => Promise<string>
 
 export default class Uploader {
-  options = {};
-  el = null;
+  private options: UploaderOption;
+  private el: HTMLInputElement;
+  private uploadServer: UploaderServer;
+  private urls: string[] = []
 
-  constructor(options) {
-    this.options = { ...defaultOptions, ...options };
+  constructor(uploadServer: UploaderServer, options: Options) {
+    this.options = { 
+      count: 1,
+      autoUpload: true, 
+      ...options 
+    };
+    this.uploadServer = uploadServer;
     this.el = this.createInput();
   }
 
-  createInput() {
+  private createInput() {
+    Array.from(document.querySelectorAll('.uploader-form-input')).forEach(
+      el => {
+        document.body.removeChild(el);
+      },
+    );
     const el = document.createElement('input');
     el.className = 'uploader-form-input';
     el.type = 'file';
@@ -40,12 +51,14 @@ export default class Uploader {
     return el;
   }
 
-  chooseFile() {
+  public chooseFile(): Promise<string[] | File[]> {
     let el = this.el;
     document.body.appendChild(el);
     el.click();
+
     return new Promise((resolve, reject) => {
-      el.onchange = async (e) => {
+      // 由于无法监听input file 取消事件
+      el.onchange = async (e: any) => {
         let files = e.target.files || [];
         files = Array.prototype.slice.call(files);
         if (files.length === 0) {
@@ -53,7 +66,6 @@ export default class Uploader {
         }
         try {
           this.checkFile(files);
-          // 需要对文件进行操作，例如压缩图片，可压缩图片后把处理后的图片组传给 uploadFiles
           if (this.options.autoUpload) {
             const urls = await this.uploadFiles(files);
             resolve(urls);
@@ -66,12 +78,38 @@ export default class Uploader {
         el.onchange = null;
         document.body.removeChild(el);
       };
+
+      function onWindowBlur() {
+        const checkFileCancel = async (
+          repeatTime: number,
+        ): Promise<any> => {
+          repeatTime -= 1;
+          setTimeout(() => {
+            if (repeatTime > 0 && !el.files!.length) {
+              return checkFileCancel(repeatTime);
+            } else if (repeatTime <= 0) {
+              window.removeEventListener('focus', onWindowBlur);
+              resolve([]);
+            }
+            return;
+          }, 50);
+        };
+        const MAX_REPEAT_TIME = 20;
+        checkFileCancel(MAX_REPEAT_TIME);
+      }
+
+      window.addEventListener('focus', onWindowBlur);
     });
   }
 
-  async uploadFiles(files) {
+  public onProgress(fn: (urls: string[])=>any) {
+    fn(this.urls)
+  }
+
+
+  private async uploadFiles(files: File[]) {
     const results = files.map(file => ({ file }));
-    const urls = [];
+    const urls: string[] = [];
     // 为保证progress事件的url是按上传顺序触发, 此处不能并行上传
     for (let result of results) {
       const url = await this.uploadFile(result);
@@ -80,16 +118,11 @@ export default class Uploader {
     return urls;
   }
 
-  uploadFile(result) {
-    try {
-     return this.options.uploadAPI(result.file);
-    } catch (err) {
-      // 处理错误
-      console.log(err.message);
-    }
+  private async uploadFile(result: { file: File }) {
+    return this.uploadServer(result.file);
   }
 
-  checkFile(files) {
+  private checkFile(files: File[]) {
     const typeError = this.checkTypes(files);
     if (typeError) {
       throw new Error(typeError);
@@ -101,7 +134,7 @@ export default class Uploader {
     }
   }
 
-  checkTypes(files) {
+  private checkTypes(files: File[]) {
     const accept = this.options.accept;
     if (accept) {
       let fileType = '';
@@ -119,7 +152,8 @@ export default class Uploader {
     return null;
   }
 
-  checkSize(files) {
+
+  private checkSize(files: File[]) {
     const options = this.options;
     for (let file of files) {
       if (options.minSize && file.size < options.minSize) {

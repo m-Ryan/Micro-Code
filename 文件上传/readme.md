@@ -12,8 +12,9 @@ function upload(file) {
   return axios.post('/upload', data)
 }
 
-const uploader = new Uploader({
-  uploadAPI: upload
+const uploader = new Uploader(upload, {})
+uploader.onProgress((urls)=>{
+  console.log('正在上传')
 })
 const urls = await uploader.chooseFile();
 console.log(urls);
