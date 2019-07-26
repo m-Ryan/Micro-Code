@@ -9,13 +9,26 @@ interface UploaderOption extends Options {
   count: number;
 }
 
+const enum UploaderEvent {
+  BEFORE = 'before',
+  PROGRESS = 'progress',
+  END = 'end'
+}
+
+interface IUploadHandler {
+  [UploaderEvent.BEFORE]?: () => void;
+  [UploaderEvent.PROGRESS]?: (urls: string[])=> void;
+  [UploaderEvent.END]?: (urls: string[])=>void;
+}
+
 type UploaderServer = (file: File) => Promise<string>
 
 export default class Uploader {
   private options: UploaderOption;
   private el: HTMLInputElement;
   private uploadServer: UploaderServer;
-  private urls: string[] = []
+  private urls: string[] = [];
+  private handler:IUploadHandler = {};
 
   constructor(uploadServer: UploaderServer, options: Options) {
     this.options = { 
@@ -25,6 +38,7 @@ export default class Uploader {
     };
     this.uploadServer = uploadServer;
     this.el = this.createInput();
+    this.chooseFile();
   }
 
   private createInput() {
@@ -51,70 +65,21 @@ export default class Uploader {
     return el;
   }
 
-  public chooseFile(): Promise<string[] | File[]> {
-    let el = this.el;
-    document.body.appendChild(el);
-    el.click();
-
-    return new Promise((resolve, reject) => {
-      // 由于无法监听input file 取消事件
-      el.onchange = async (e: any) => {
-        let files = e.target.files || [];
-        files = Array.prototype.slice.call(files);
-        if (files.length === 0) {
-          return;
-        }
-        try {
-          this.checkFile(files);
-          if (this.options.autoUpload) {
-            const urls = await this.uploadFiles(files);
-            resolve(urls);
-          } else {
-            resolve(files);
-          }
-        } catch (err) {
-          reject(err);
-        }
-        el.onchange = null;
-        document.body.removeChild(el);
-      };
-
-      function onWindowBlur() {
-        const checkFileCancel = async (
-          repeatTime: number,
-        ): Promise<any> => {
-          repeatTime -= 1;
-          setTimeout(() => {
-            if (repeatTime > 0 && !el.files!.length) {
-              return checkFileCancel(repeatTime);
-            } else if (repeatTime <= 0) {
-              window.removeEventListener('focus', onWindowBlur);
-              resolve([]);
-            }
-            return;
-          }, 50);
-        };
-        const MAX_REPEAT_TIME = 20;
-        checkFileCancel(MAX_REPEAT_TIME);
-      }
-
-      window.addEventListener('focus', onWindowBlur);
-    });
-  }
-
-  public onProgress(fn: (urls: string[])=>any) {
-    fn(this.urls)
-  }
-
-
   private async uploadFiles(files: File[]) {
     const results = files.map(file => ({ file }));
     const urls: string[] = [];
-    // 为保证progress事件的url是按上传顺序触发, 此处不能并行上传
-    for (let result of results) {
-      const url = await this.uploadFile(result);
-      urls.push(url);
-    }
+
+    // 开始上传
+    this.handler[UploaderEvent.BEFORE]();
+
+    // 上传中
+    await Promise.all(results.map((async(file)=>{
+      const url = await this.uploadFile(file);
+      this.urls.push(url)
+      this.handler[UploaderEvent.PROGRESS](urls);
+    })))
+    // 上传完成
+    this.handler[UploaderEvent.END](urls);
     return urls;
   }
 
@@ -164,5 +129,34 @@ export default class Uploader {
       }
     }
     return null;
+  }
+
+  private chooseFile() {
+    let el = this.el;
+    document.body.appendChild(el);
+    el.click();
+
+    el.onchange = async (e: any) => {
+      let files = e.target.files || [];
+      files = Array.prototype.slice.call(files);
+      if (files.length === 0) {
+        return;
+      }
+      this.checkFile(files);
+      if (this.options.autoUpload) {
+        this.uploadFiles(files);
+      } 
+      el.onchange = null;
+      document.body.removeChild(el);
+    };
+
+  }
+
+  public on<T extends UploaderEvent>(event: T, fn: IUploadHandler[T]) {
+    this.handler[event] = fn;
+  }
+
+  public off<T extends UploaderEvent>(event: T) {
+    delete this.handler[event];
   }
 }

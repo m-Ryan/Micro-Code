@@ -13,10 +13,16 @@ function upload(file) {
 }
 
 const uploader = new Uploader(upload, {})
-uploader.onProgress((urls)=>{
+const urls = await uploader.chooseFile();
+uploader.on('before', (urls)=>{
+  console.log('即将上传')
+})
+uploader.on('progress', (urls)=>{
   console.log('正在上传')
 })
-const urls = await uploader.chooseFile();
+uploader.on('end', (urls)=>{
+  console.log('上传完成')
+})
 console.log(urls);
 
 ```
